@@ -4,4 +4,4 @@
 package. The man page contains examples of its use. Further examples
 can also be found in the code described below.
 
-"./simulation" contains the routines used to obtain the results reported in the simulation section.
+"./simulations.R" contains the routines used to obtain the results reported in the simulation section.

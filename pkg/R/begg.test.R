@@ -1,0 +1,79 @@
+#' Begg's test of publication bias, standard form or bias-corrected. Uses code from src/library/stats/R/cor.test.R.
+
+#' 
+#' @param y study effects
+#' @param v study effect variances
+#' @param corrected whether to adjust the asymptotic variance to an estimate of the correct value (defaults to TRUE)
+#' @param ... additional parameters passed to stats::cor
+#' @return a named list of class "htest" containing the p-value of the hypothesis test
+#' @examples
+#' 
+#' n <- 10
+#' y <- rnorm(n)
+#' v <- runif(n)
+#' begg.test(y,v)
+#' begg.test(y,v,adjusted=FALSE)
+#' @export
+
+
+
+
+tau <- function(y,v,...) {
+    theta.fe <- sum(y/v)/sum(1/v)
+    v.star <- v-1/sum(1/v)
+    cor( (y-theta.fe)/sqrt(v.star),v,method='kendall',...)
+}
+
+begg.test <- function(y,v,adjusted=TRUE,...) {
+    
+    DNAME <- paste(deparse(substitute(y)), "and", deparse(substitute(v)))
+    if(length(y) != length(v))
+        stop("'y' and 'v' must have the same length")
+    if(!is.numeric(y)) stop("'y' must be a numeric vector")
+    if(!is.numeric(v)) stop("'v' must be a numeric vector")
+    OK <- complete.cases(y, v)
+    y <- y[OK]
+    v <- v[OK]
+    n <- length(y)
+    NVAL <- 0    
+    if(n < 2)
+        stop("not enough finite observations")
+    PARAMETER <- NULL
+    TIES <- (min(length(unique(y)), length(unique(v))) < n)
+    if(TIES) warning("Cannot compute exact p-value with ties")
+    if(adjusted) {
+        method <- "Begg's test of publication bias (bias-adjusted)"
+    } else { method <- "Begg's test of publication bias (standard)"}
+    names(NVAL) <- "tau"
+    tau.hat <- tau(y,v,...)    
+    ESTIMATE <- c(tau = tau.hat)
+
+    if(!is.finite(ESTIMATE)) {
+        ESTIMATE[] <- NA
+        STATISTIC <- c(T = NA)
+        PVAL <- NA
+    }
+    else {
+        STATISTIC <- c(T = round((tau.hat + 1) * n * (n - 1) / 4))
+        bias.hat <- if(adjusted) {
+                        s <- sqrt(1/v)
+                        s.md.hat <- mean(abs(outer(s,s,`-`)))
+                        s2.hat <- mean(s^2)
+                        bias.hat <- s.md.hat^2/s2.hat/pi
+                    } else {
+                        bias.hat <- 0
+                    }
+        PVAL <-2*pnorm(sqrt(n/(4/9-bias.hat))*abs(tau.hat),lower.tail=FALSE)
+    }
+    
+    RVAL <- list(statistic = STATISTIC,
+                 parameter = PARAMETER,
+                 p.value = as.numeric(PVAL),
+                 estimate = ESTIMATE,
+                 null.value = c(tau=0),
+                 alternative = 'two.sided',
+                 method = method,
+                 data.name = DNAME)
+    class(RVAL) <- "htest"
+    RVAL
+}

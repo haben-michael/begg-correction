@@ -1,0 +1,229 @@
+## Contents:
+
+## 1. FPR analysis, used in generating the table of FPRs
+## 2. A partial replication of the simulation in Begg '94
+## 3. Power analysis, used in generating the table of power curves
+
+
+## 1. FPR analysis
+source('misc.R')
+require(parallel)
+B <- 3e3
+q <- qnorm(1-.05/2)
+rS <- rexp
+rho <- 1/2
+rSs <- c(uniform=function(n)runif(n,0,1), exponential=rexp, gamma=function(n)rgamma(n,shape=.54), beta=function(n)rbeta(n,.15,.39), pareto=function(n)rpareto(n,location=1,shape=2.52687))
+rhos <- c(uniform=1/3,exponential=1/2,gamma=.56,beta=.66,pareto=.1390052)
+biases <- rhos/pi
+distributions <- structure(names(rSs),names=names(rSs))
+## distributions <- distributions[1:2]
+ns <- round(seq(1e1,1.5e2,len=20))
+by.distr <- lapply(distributions, function(distr) {
+    rS <- rSs[[distr]]; bias <- biases[distr]
+    ## rS <- runif; bias <- 1/3/pi
+    by.n <- sapply(ns, FUN=function(n) {
+        tau.stats <- mclapply(1:B, mc.cores=detectCores()-2, FUN=function(jj) {
+            s <- rS(n)
+            z <- rnorm(n)
+            s.md.hat <- mean(abs(outer(s,s,`-`)))
+            s2.hat <- mean(s^2)
+            bias.hat <- s.md.hat^2/s2.hat/pi
+            c(tau=tau(z,s),bias.hat=bias.hat)
+        })
+        tau.stats <- simplify2array(tau.stats)
+        tau.hat <- tau.stats['tau',]; bias.hat <- tau.stats['bias.hat',]
+        ## var(tau.stats)
+        c(power=mean(sqrt(9*n/4)*abs(tau.hat)>q),power.debiased=mean(sqrt(n/(4/9-bias))*abs(tau.hat)>q),power.debiased.hat=mean(sqrt(n/(4/9-bias.hat))*abs(tau.hat)>q))
+    })
+})
+
+power <- sapply(by.distr,function(m)m['power',])
+power.debiased <- sapply(by.distr,function(m)m['power.debiased',])
+power.debiased.hat <- sapply(by.distr,function(m)m['power.debiased.hat',])
+matplot(power,x=ns,type='l',lty=1:length(distributions),col=1,xlab='number of studies',ylab='FPR',ylim=range(unlist(by.distr)))
+matplot(ns,power.debiased,lty=1:length(distributions),type='l',col=2,add=TRUE)
+matplot(ns,power.debiased.hat,lty=1:length(distributions),type='l',col=3,add=TRUE)
+abline(h=.05)
+legend('topright',lty=1:length(distributions),legend=distributions)
+
+require(xtable)
+ns.idx <- which(ns %in% c(25,76,150))
+out <- matrix(paste0(t(round(power,2)[ns.idx,]),', ',t(round(power.debiased,2)[ns.idx,]),', ',t(round(power.debiased.hat,2)[ns.idx,])),nrow=length(distributions))
+attr(out,'dimnames') <- list(distribution=distributions,n=ns[ns.idx])
+addtorow <- list(pos=list(0, 0),
+                 command=c("& \\multicolumn{3}{c}{meta-analysis size} \\\\\n",
+                      paste0('precision distribution &',paste0(ns[ns.idx],collapse='&'), '\\\\\n')))
+sink('ms/210313_table.tex')
+print.xtable(xtable(out),add.to.row = addtorow,floating=FALSE,latex.environment=NULL,include.colnames = FALSE)
+## print.xtable(xtable(out),add.to.row = addtorow,include.colnames = FALSE)
+sink()
+
+
+
+
+## 2. Begg '94 simulation replication
+require(parallel)
+require(reshape2)
+tau <- function(y,v) {
+    ## y <- z/s
+    theta.fe <- sum(y/v)/sum(1/v)
+    ## list(tau=cor((y-theta.fe)/sqrt(v-1/sum(1/v)),v,method='kendall'),theta.fe=theta.fe)
+    cor((y-theta.fe)/sqrt(v-1/sum(1/v)),v,method='kendall')
+}
+w <- function(t,v,strong=FALSE){
+    a <- strong*1.5+(!strong)*3
+    b <- 4
+    p <- pnorm(-t/sqrt(v))
+    exp(-b*p^a)
+}
+## curve(w(-x,1),-2,2)
+## curve(w(-x,1,strong=TRUE),add=TRUE,lty=2)
+B <- 3e3
+q <- qnorm(1-.05/2)
+deltas <- seq(0,3,by=.5)
+param.configs <- expand.grid(strong.select=c(TRUE,FALSE),vs=list(small=c(.5,1,2),large=c(.1,1,10)),delta=deltas,ns=list(small=c(8,9,8),large=c(25,25,25)))
+reject <- mclapply(1:B, mc.cores=detectCores()-4, FUN= function(jj){
+## reject <- lapply(1:B, FUN= function(jj){
+    cat('.')
+    ## reject <- lapply(1:B, FUN= function(jj) {
+    apply(param.configs,1,function(params) {
+        ## with(params, {        
+        delta <- params$delta; vs <- unlist(params$vs); strong.select=params$strong.select; ns <- unlist(params$ns)
+        total.sampled <- 0
+        data <- lapply(1:3, function(j) {
+            v <- vs[j];  n <- ns[j]
+            t <- numeric()
+            v.jittered <- numeric()
+            while(length(t)<n) {
+                total.sampled <<- total.sampled+1
+                v.try <- jitter(v)
+                t.try <- rnorm(1,mean=delta,sd=sqrt(v.try))
+                if(rbinom(1,1,prob=w(t.try,v.try,strong=strong.select))) {
+                    t <- c(t,t.try)
+                    v.jittered <- c(v.jittered,v.try)
+                }
+            }
+            rbind(t=t,v=v.jittered)
+        })
+        data <- do.call(cbind,data)
+        t <- data['t',]; v <- data['v',]
+         ## theta.fe <- sum(t/v)/sum(1/v);plot(v,(t-theta.fe)/sqrt(v))
+        c(reject=sqrt(9*length(t)/4)*abs(tau(t,v)) > q,total.sampled=total.sampled)
+        ## })
+    })
+})
+total.sampled <- rowMeans(sapply(reject,function(m)m['total.sampled',]))
+sample.rate <- sapply(param.configs$ns,sum) / total.sampled
+power <- rowMeans(sapply(reject,function(m)m['reject',]))
+tables <- lapply(list(sample.rate=sample.rate,power=power), function(data){
+    out <- cbind(param.configs,value=data)
+    out$vs <- names(out$vs)
+    out$ns <- names(out$ns)
+    ## out <- melt(out,id.vars=c('ID','power'))
+    out.smallstudy <- out[out$ns=='small',]
+    out.smallstudy <- acast(out.smallstudy, strong.select ~ vs ~ delta)
+})
+power <- tables[['power']]; sample.rate <- tables[['sample.rate']]
+attr(sample.rate,'dimnames') <- attr(power,'dimnames')  <-  structure(attr(power,'dimnames'),names=c('strong.select','v.range','delta'))
+power
+
+
+
+## 3. Power analysis
+require(parallel)
+require(reshape2)
+require(EnvStats)
+tau <- function(y,v) {
+    ## y <- z/s
+    theta.fe <- sum(y/v)/sum(1/v)
+    ## list(tau=cor((y-theta.fe)/sqrt(v-1/sum(1/v)),v,method='kendall'),theta.fe=theta.fe)
+    cor((y-theta.fe)/sqrt(v-1/sum(1/v)),v,method='kendall')
+}
+w <- function(t,v,a=1,b=4){
+    p <- pnorm(-t/sqrt(v))
+    exp(-b*p^a)
+}
+## curve(w(-x,1),-2,2)
+## curve(w(-x,1,strong=TRUE),add=TRUE,lty=2)
+B <- 1e3
+q <- qnorm(1-.05/2)
+ns <- c(25,75,150)
+## ns <- round(seq(10,1.5e2,len=10))
+rSs <- c(uniform=function(n)runif(n,0,1), exponential=rexp, gamma=function(n)rgamma(n,shape=.54), beta=function(n)rbeta(n,.15,.39), pareto=function(n)rpareto(n,location=1,shape=2.52687))
+biases <- c(uniform=.11, beta=.21, exponential=.16, gamma=.18, pareto=.04)
+distributions <- names(rSs)
+## distributions <- c('beta','uniform')
+names(distributions) <- distributions
+select.strengths <- seq(0,5,len=10)
+by.n <- mclapply(ns, mc.cores=detectCores()-2, FUN=function(n) {
+    by.distr <- lapply(distributions, function(distr) {
+        rS <- rSs[[distr]]; bias <- biases[distr]
+        by.select <- sapply(select.strengths, function(select.strength) {
+            rowMeans(replicate(B, {
+                total.sampled <- 0
+                t <- v <- numeric()
+                while(length(t)<n) {
+                    total.sampled <- total.sampled+1
+                    v.try <- 1/rS(1)^2
+                    t.try <- rnorm(1,sd=sqrt(v.try))
+                    if(rbinom(1,1,prob=w(t.try,v.try,b=select.strength))) {
+                        t <- c(t,t.try)
+                        v <- c(v,v.try)
+                    }
+                }
+                s <- sqrt(1/v)
+                s.md.hat <- mean(abs(outer(s,s,`-`)))
+                s2.hat <- mean(s^2)
+                bias.hat <- s.md.hat^2/s2.hat/pi
+                ## theta.fe <- sum(t/v)/sum(1/v);plot(v,(t-theta.fe)/sqrt(v))
+                c(reject=unname(sqrt(n/(4/9))*abs(tau(t,v)) > q), reject.debiased=unname(sqrt(n/(4/9-bias))*abs(tau(t,v)) > q),reject.debiased.hat=unname(sqrt(n/(4/9-bias.hat))*abs(tau(t,v)) > q),total.sampled=unname(total.sampled))
+            }))
+        })
+    })
+})
+op <- par(mfrow=c(1,3))
+for(jj in 1:length(by.n)) {
+    by.distr <- by.n[[jj]]#simplify2array(by.n[[jj]])
+    power.curves <- sapply(by.distr,function(m)m['reject',])
+    matplot(select.strengths,power.curves,type='l',lty=1:length(rSs),col=1,xlab='selection strength',ylab='rejection rate')
+    power.curves.debiased <- sapply(by.distr,function(m)m['reject.debiased',])
+    matplot(select.strengths,power.curves.debiased,type='l',lty=1:length(rSs),col=2,xlab='selection strength',ylab='rejection rate',add=TRUE)
+    power.curves.debiased.hat <- sapply(by.distr,function(m)m['reject.debiased.hat',])
+    matplot(select.strengths,power.curves.debiased.hat,type='l',lty=1:length(rSs),col=3,xlab='selection strength',ylab='rejection rate',add=TRUE)
+    abline(h=.05)
+    legend('bottomright',lty=1:length(rSs),legend=distributions)
+}
+par(op)
+
+
+op <- par(mfrow=c(length(distributions),length(ns)))
+for(j in 1:length(distributions)) {
+    power <- lapply(by.n,function(lst)lst[[distributions[j]]])
+    for(k in 1:length(ns)) {
+        ## plot(select.strengths,power[[k]]['reject',],ty)
+        percent.filtered <- 1-ns[k]/power[[k]][4,]
+        matplot(percent.filtered,t(power[[k]][-4,]),type='l',col=1,lty=1:3,ylab='power',xlab='proportion of studies not selected')
+        }
+}
+par(op)
+
+require(ggplot2)
+by.distr <- lapply(distributions,function(distribution)simplify2array(lapply(by.n,function(lst)lst[[distribution]])))
+by.distr <- lapply(by.distr,function(lst){
+    dimnames(lst) <- list(estimator=c('standard','debiased','debiased.hat','total.sampled'),select.strength=round(select.strengths,2),n=ns)
+    ## for(j in 1:dim(lst)[3]) lst[,,j]
+    lst
+})
+by.distr <- simplify2array(by.distr)
+names(dimnames(by.distr))[4] <- 'distribution'
+by.distr <- melt(by.distr)
+
+dat <- merge(by.distr[by.distr$estimator!='total.sampled',],by.distr[by.distr$estimator=='total.sampled',colnames(by.distr)!='estimator'],by=c('select.strength','n','distribution'))
+colnames(dat)[colnames(dat)=='value.x'] <- 'power'
+colnames(dat)[colnames(dat)=='value.y'] <- 'total.sampled'
+dat$select.strength <- round(dat$n / dat$total.sampled,2)
+plt <- ggplot(dat[dat$distribution!='pareto',],aes(x=select.strength,y=power,group=estimator,linetype=estimator))+geom_line()+facet_wrap(. ~ distribution + n,nrow=4) + scale_x_reverse() + theme_classic() + labs(x='% studies selected',y='power') + scale_linetype_manual(name='estimator',labels=c('standard','debiased\noracle','debiased\napprox.'),values=1:3)
+plt
+
+
+es

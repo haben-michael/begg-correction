@@ -5,22 +5,31 @@
 ## 3. Power analysis, used in generating the table of power curves
 
 
+
+
+
 ## 1. FPR analysis
 ## source('misc.R')
 
 
-tau <- function(z,s) {
-    y <- z/s
-    theta.fe <- sum(y*s^2)/sum(s^2)
-    cor(z-theta.fe*s,s,method='kendall')
+## tau <- function(z,s) {
+##     y <- z/s
+##     theta.fe <- sum(y*s^2)/sum(s^2)
+##     cor(z-theta.fe*s,s,method='kendall')
+## }
+tau <- function(y,v) {
+    ## y <- z/s
+    theta.fe <- sum(y/v)/sum(1/v)
+    ## list(tau=cor((y-theta.fe)/sqrt(v-1/sum(1/v)),v,method='kendall'),theta.fe=theta.fe)
+    cor((y-theta.fe)/sqrt(v-1/sum(1/v)),v,method='kendall')
 }
 
 require(parallel)
-B <- 3e3
+B <- 5e3
 q <- qnorm(1-.05/2)
 rS <- rexp
 rho <- 1/2
-rSs <- c(uniform=function(n)runif(n,0,1), exponential=rexp, gamma=function(n)rgamma(n,shape=.54), beta=function(n)rbeta(n,.15,.39), pareto=function(n)rpareto(n,location=1,shape=2.52687))
+rSs <- c(uniform=function(n)runif(n,0,1), exponential=rexp, gamma=function(n)rgamma(n,shape=.54), beta=function(n)rbeta(n,.15,.39), pareto=function(n)EnvStats::rpareto(n,location=1,shape=2.52687))
 rhos <- c(uniform=1/3,exponential=1/2,gamma=.56,beta=.66,pareto=.1390052)
 biases <- rhos/pi
 distributions <- structure(names(rSs),names=names(rSs))
@@ -31,12 +40,13 @@ by.distr <- lapply(distributions, function(distr) {
     ## rS <- runif; bias <- 1/3/pi
     by.n <- sapply(ns, FUN=function(n) {
         tau.stats <- mclapply(1:B, mc.cores=detectCores()-2, FUN=function(jj) {
+        ## tau.stats <- lapply(1:B,  FUN=function(jj) {
             s <- rS(n)
             z <- rnorm(n)
             s.md.hat <- mean(abs(outer(s,s,`-`)))
             s2.hat <- mean(s^2)
             bias.hat <- s.md.hat^2/s2.hat/pi
-            c(tau=tau(z,s),bias.hat=bias.hat)
+            c(tau=tau(y=z/s,v=1/s^2),bias.hat=bias.hat)
         })
         tau.stats <- simplify2array(tau.stats)
         tau.hat <- tau.stats['tau',]; bias.hat <- tau.stats['bias.hat',]
@@ -61,12 +71,10 @@ attr(out,'dimnames') <- list(distribution=distributions,n=ns[ns.idx])
 addtorow <- list(pos=list(0, 0),
                  command=c("& \\multicolumn{3}{c}{meta-analysis size} \\\\\n",
                       paste0('precision distribution &',paste0(ns[ns.idx],collapse='&'), '\\\\\n')))
-sink('ms/210313_table.tex')
+## sink('210313_table.tex')
 print.xtable(xtable(out),add.to.row = addtorow,floating=FALSE,latex.environment=NULL,include.colnames = FALSE)
 ## print.xtable(xtable(out),add.to.row = addtorow,include.colnames = FALSE)
-sink()
-
-
+## sink()
 
 
 ## 2. Begg '94 simulation replication

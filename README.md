@@ -1,4 +1,4 @@
-# Code supporting the manuscript "A Correction to Begg’s Test for Publication Bias".
+Code supporting the manuscript "A Correction to Begg’s Test for Publication Bias".
 
 "./pkg" contains the R package "begg.test". It may be installed using the "devtools"
 package. The man page contains examples of its use. Further examples
